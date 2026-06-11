@@ -3,23 +3,66 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Intersection Controller REAL</title>
+<title>Intersection Controller Mobile</title>
 
 <style>
-body { margin:0; background:#111; overflow:hidden; font-family:Arial; }
-canvas { display:block; }
-#ui {
-  position:fixed; top:10px; left:10px; color:white; z-index:10;
+body {
+  margin:0;
+  overflow:hidden;
+  background:#0f0f10;
+  font-family:Arial;
 }
-button { padding:8px; margin:4px; border-radius:6px; border:none; }
+
+canvas {
+  display:block;
+}
+
+/* MOBILE HUD */
+#hud {
+  position:fixed;
+  bottom:0;
+  left:0;
+  width:100%;
+  height:110px;
+  background:rgba(20,20,20,0.9);
+  display:flex;
+  align-items:center;
+  justify-content:space-around;
+  color:white;
+  z-index:10;
+  backdrop-filter: blur(10px);
+}
+
+button {
+  padding:12px 16px;
+  border:none;
+  border-radius:10px;
+  background:#2a2a2a;
+  color:white;
+  font-size:14px;
+}
+
+/* TOP INFO */
+#topbar {
+  position:fixed;
+  top:10px;
+  left:10px;
+  color:white;
+  z-index:10;
+}
 </style>
 </head>
 
 <body>
 
-<div id="ui">
+<div id="topbar">
+  Score: <span id="score">0</span>
+</div>
+
+<div id="hud">
   <button onclick="togglePause()">Pause</button>
-  <div>Score: <span id="score">0</span></div>
+  <button onclick="toggleLightsMode()">Auto Lights</button>
+  <button onclick="reset()">Reset</button>
 </div>
 
 <canvas id="c"></canvas>
@@ -28,168 +71,174 @@ button { padding:8px; margin:4px; border-radius:6px; border:none; }
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+canvas.width = innerWidth;
+canvas.height = innerHeight;
 
-// ---------------- SIM STATE ----------------
-let paused = false;
-let score = 0;
+// ---------------- CAMERA (mobile feel) ----------------
+let camX = 0;
+let camY = 0;
+let zoom = 1;
 
-// ---------------- ROADS (CENTER CROSS) ----------------
-const cx = canvas.width/2;
-const cy = canvas.height/2;
+// drag camera
+let dragging = false;
+let lastX, lastY;
 
-const roadWidth = 120;
+canvas.addEventListener("mousedown",(e)=>{
+  dragging = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+});
 
-// ---------------- TRAFFIC LIGHT STATE MACHINE ----------------
-let phase = "NS"; // NS, EW, YELLOW
-let timer = 0;
+canvas.addEventListener("mousemove",(e)=>{
+  if(!dragging) return;
+  camX += (e.clientX-lastX);
+  camY += (e.clientY-lastY);
+  lastX = e.clientX;
+  lastY = e.clientY;
+});
 
-// ---------------- WAYPOINTS ----------------
-// Cars follow a path instead of free movement
-function createPath(dir){
-  if(dir === "N"){
-    return [{x:cx, y:canvas.height+50},{x:cx,y:cy-roadWidth},{x:cx,-50}];
-  }
-  if(dir === "S"){
-    return [{x:cx, y:-50},{x:cx,y:cy+roadWidth},{x:cx,canvas.height+50}];
-  }
-  if(dir === "E"){
-    return [{x:-50, y:cy},{x:cx-roadWidth,y:cy},{x:canvas.width+50,cy}];
-  }
-  if(dir === "W"){
-    return [{x:canvas.width+50, y:cy},{x:cx+roadWidth,y:cy},{x:-50,cy}];
-  }
-}
+canvas.addEventListener("mouseup",()=>dragging=false);
 
-// ---------------- VEHICLE ----------------
-class Car {
-  constructor(type, dir){
-    this.type = type;
-    this.path = createPath(dir);
-    this.i = 0;
-    this.x = this.path[0].x;
-    this.y = this.path[0].y;
-    this.speed = type==="fast"?3:type==="truck"?1.5:2.2;
-    this.size = type==="truck"?26:16;
-    this.priority = type==="ambulance";
-  }
+// touch support
+canvas.addEventListener("touchstart",(e)=>{
+  let t=e.touches[0];
+  dragging=true;
+  lastX=t.clientX;
+  lastY=t.clientY;
+});
+canvas.addEventListener("touchmove",(e)=>{
+  let t=e.touches[0];
+  camX += (t.clientX-lastX);
+  camY += (t.clientY-lastY);
+  lastX=t.clientX;
+  lastY=t.clientY;
+});
+canvas.addEventListener("touchend",()=>dragging=false);
 
-  currentTarget(){
-    return this.path[this.i];
+// ---------------- GAME STATE ----------------
+let paused=false;
+let autoLights=true;
+let score=0;
+
+// ---------------- CITY GRID ----------------
+const gridSize = 600;
+const intersections = [
+  {x:0,y:0},
+  {x:gridSize,y:0},
+  {x:0,y:gridSize},
+  {x:gridSize,y:gridSize}
+];
+
+// ---------------- TRAFFIC LIGHT ----------------
+class Light {
+  constructor(x,y){
+    this.x=x;
+    this.y=y;
+    this.phase=0;
+    this.timer=0;
   }
 
   update(){
-    if(this.i >= this.path.length-1){
-      score += this.priority ? 5 : 1;
-      document.getElementById("score").innerText = score;
-      this.dead = true;
-      return;
+    this.timer++;
+
+    if(this.timer>200){
+      this.phase=(this.phase+1)%2;
+      this.timer=0;
+    }
+  }
+
+  nsGreen(){
+    return this.phase===0;
+  }
+
+  draw(){
+    ctx.fillStyle=this.nsGreen()?"green":"red";
+    ctx.beginPath();
+    ctx.arc(this.x,this.y,8,0,Math.PI*2);
+    ctx.fill();
+  }
+}
+
+let lights = intersections.map(p=>new Light(p.x,p.y));
+
+// ---------------- VEHICLE ----------------
+class Car {
+  constructor(x,y,dir){
+    this.x=x;
+    this.y=y;
+    this.dir=dir;
+    this.speed=2+Math.random();
+    this.size=14;
+  }
+
+  update(){
+    let l = lights[0];
+
+    let inCross =
+      Math.abs(this.x-gridSize/2)<60 &&
+      Math.abs(this.y-gridSize/2)<60;
+
+    let stop = !l.nsGreen() && inCross;
+
+    if(!stop){
+      if(this.dir==="E") this.x+=this.speed;
+      if(this.dir==="W") this.x-=this.speed;
+      if(this.dir==="N") this.y-=this.speed;
+      if(this.dir==="S") this.y+=this.speed;
     }
 
-    let t = this.currentTarget();
-
-    let dx = t.x - this.x;
-    let dy = t.y - this.y;
-    let dist = Math.hypot(dx,dy);
-
-    // ---------------- TRAFFIC LOGIC ----------------
-    let inIntersection =
-      Math.abs(this.x-cx)<roadWidth &&
-      Math.abs(this.y-cy)<roadWidth;
-
-    let blocked =
-      !this.priority &&
-      inIntersection &&
-      ((phase==="NS" && (dx!==0)) || (phase==="EW" && (dy!==0)));
-
-    if(!blocked){
-      this.x += (dx/dist)*this.speed;
-      this.y += (dy/dist)*this.speed;
-    }
-
-    if(dist < 5){
-      this.i++;
+    // score when leaving
+    if(this.x<-200||this.x>1200||this.y<-200||this.y>1200){
+      score++;
+      document.getElementById("score").innerText=score;
+      this.dead=true;
     }
   }
 
   draw(){
-    ctx.fillStyle =
-      this.type==="ambulance"?"white":
-      this.type==="truck"?"orange":
-      this.type==="fast"?"cyan":"lime";
-
-    ctx.fillRect(this.x-this.size/2,this.y-this.size/2,this.size,this.size);
+    ctx.fillStyle="lime";
+    ctx.fillRect(this.x,this.y,this.size,this.size);
   }
 }
 
-// ---------------- SPAWNING ----------------
-let cars = [];
+let cars=[];
 
 function spawn(){
-  const types=["car","car","fast","truck","ambulance"];
-  const dirs=["N","S","E","W"];
+  let dirs=["N","S","E","W"];
+  let d=dirs[Math.floor(Math.random()*4)];
 
-  cars.push(new Car(
-    types[Math.floor(Math.random()*types.length)],
-    dirs[Math.floor(Math.random()*4)]
-  ));
+  let x=gridSize/2;
+  let y=gridSize/2;
+
+  cars.push(new Car(x,y,d));
 }
 
-setInterval(()=>{ if(!paused) spawn(); },700);
+setInterval(()=>{ if(!paused) spawn(); },900);
 
-// ---------------- TRAFFIC LIGHT ENGINE ----------------
-function updateLights(){
-  timer++;
+// ---------------- DRAW CITY ----------------
+function drawRoads(){
+  ctx.fillStyle="#2a2a2a";
 
-  if(phase==="NS" && timer>240){
-    phase="YELLOW"; timer=0;
-  }
-  else if(phase==="YELLOW" && timer>60){
-    phase="EW"; timer=0;
-  }
-  else if(phase==="EW" && timer>240){
-    phase="YELLOW"; timer=0;
-  }
-  else if(phase==="YELLOW" && timer>60){
-    phase="NS"; timer=0;
-  }
-}
-
-// ---------------- DRAW ROAD ----------------
-function drawRoad(){
-  ctx.fillStyle="#333";
-
-  // vertical
-  ctx.fillRect(cx-roadWidth,0,roadWidth*2,canvas.height);
-
-  // horizontal
-  ctx.fillRect(0,cy-roadWidth,canvas.width,roadWidth*2);
-}
-
-// ---------------- DRAW LIGHTS ----------------
-function drawLights(){
-  ctx.fillStyle = phase==="NS"?"green":"red";
-  ctx.fillRect(cx-40,cy-roadWidth-30,10,10);
-  ctx.fillRect(cx+30,cy+roadWidth+20,10,10);
-
-  ctx.fillStyle = phase==="EW"?"green":"red";
-  ctx.fillRect(cx-roadWidth-30,cy+30,10,10);
-  ctx.fillRect(cx+roadWidth+20,cy-40,10,10);
+  ctx.fillRect(gridSize/2-80,0,160,1200);
+  ctx.fillRect(0,gridSize/2-80,1200,160);
 }
 
 // ---------------- LOOP ----------------
 function loop(){
-  if(!paused) updateLights();
-
+  ctx.setTransform(1,0,0,1,0,0);
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
-  drawRoad();
-  drawLights();
+  ctx.translate(camX,camY);
+  ctx.scale(zoom,zoom);
+
+  drawRoads();
+
+  if(autoLights) lights.forEach(l=>l.update());
+  lights.forEach(l=>l.draw());
 
   cars.forEach(c=>c.update());
   cars.forEach(c=>c.draw());
-  cars = cars.filter(c=>!c.dead);
+  cars=cars.filter(c=>!c.dead);
 
   requestAnimationFrame(loop);
 }
@@ -197,9 +246,9 @@ function loop(){
 loop();
 
 // ---------------- UI ----------------
-function togglePause(){
-  paused=!paused;
-}
+function togglePause(){ paused=!paused; }
+function toggleLightsMode(){ autoLights=!autoLights; }
+function reset(){ cars=[]; score=0; }
 </script>
 
 </body>
